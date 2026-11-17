@@ -1,0 +1,72 @@
+# ─────────────────────────────────────────────────────────────
+#  z2roN_Proj (Windows 11 서버 + 웹 화면) 자동 빌드
+#  사용법
+#   1) 이 폴더 전체를 GitHub 저장소(main)에 올립니다.
+#   2) Actions > "z2roN_Proj 빌드" > Run workflow (main 에 올리면 자동 실행)
+#   3) 끝나면 저장소 오른쪽 [Releases] 의 z2roN_Proj-win-v버전.zip 을 내려받습니다 (가장 안전).
+#      (대체: 실행 맨 아래 Artifacts 의 같은 이름 — zip 안에 zip 이 들어 있으니 한 번 더 풉니다)
+#   4) 압축을 풀어 서버 PC(Windows 11)의 원하는 폴더(예: C:\z2roN_Proj)에 넣고
+#      install_autostart.bat 를 '관리자 권한'으로 실행하면 방화벽 허용 + 로그인 시 자동 실행이 설정됩니다.
+#  결과물: 표준판(.NET 포함·압축 exe) + 경량판(런타임 별도 설치, 용량 작음) 2종 zip
+# ─────────────────────────────────────────────────────────────
+name: z2roN_Proj 빌드
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: 버전 읽기
+        id: ver
+        shell: bash
+        run: |
+          echo "v=$(grep -oP '(?<=<Version>)[^<]+' z2roN_Proj.csproj)" >> "$GITHUB_OUTPUT"
+      - name: 게시 1) 표준판 (.NET 포함 · 단일 exe · 압축)
+        run: dotnet publish z2roN_Proj.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o out
+      - name: 게시 2) 경량판 (.NET 런타임 별도 설치 필요 · 용량 매우 작음)
+        run: dotnet publish z2roN_Proj.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o out-light
+      - name: 묶기 + 압축 검사
+        shell: bash
+        run: |
+          V="${{ steps.ver.outputs.v }}"
+          mkdir pack pack-light
+          cp out/z2roN_Proj.exe pack/
+          cp out-light/z2roN_Proj.exe pack-light/
+          for d in pack pack-light; do
+            cp config.json $d/
+            cp tools/*.bat $d/
+            cp README.md $d/README.txt
+          done
+          printf '%s\r\n' "경량판은 서버 PC에 .NET Desktop Runtime 8 (x64) 과 ASP.NET Core Runtime 8 (x64) 이 필요합니다." "" "처음에는 install_runtime_and_run.bat 를 더블클릭하세요." "-> 런타임이 없으면 자동으로 내려받아 설치한 뒤 z2roN_Proj 를 실행합니다 (관리자 승인·인터넷 필요)." "수동 설치: https://dotnet.microsoft.com/download/dotnet/8.0" "(표준판 z2roN_Proj-win 은 이런 설치가 필요 없습니다.)" > pack-light/필요한런타임.txt
+          # 직접 zip 을 만들고 무결성을 검사해서 올림 (artifact 자동 압축 중 손상 방지)
+          7z a -tzip "z2roN_Proj-win-v$V.zip" ./pack/*
+          7z a -tzip "z2roN_Proj-win-light-v$V.zip" ./pack-light/*
+          7z t "z2roN_Proj-win-v$V.zip"
+          7z t "z2roN_Proj-win-light-v$V.zip"
+          sha256sum "z2roN_Proj-win-v$V.zip" "z2roN_Proj-win-light-v$V.zip" | tee "z2roN_Proj-sha256-v$V.txt"
+          ls -la out/z2roN_Proj.exe out-light/z2roN_Proj.exe z2roN_Proj-win*.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: z2roN_Proj-win-v${{ steps.ver.outputs.v }}
+          path: |
+            z2roN_Proj-win-v${{ steps.ver.outputs.v }}.zip
+            z2roN_Proj-win-light-v${{ steps.ver.outputs.v }}.zip
+            z2roN_Proj-sha256-v${{ steps.ver.outputs.v }}.txt
+          compression-level: 0
+      - name: 릴리스로도 올리기 (직접 다운로드용)
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="${{ steps.ver.outputs.v }}"
+          gh release create "v$V" "z2roN_Proj-win-v$V.zip" "z2roN_Proj-win-light-v$V.zip" "z2roN_Proj-sha256-v$V.txt" --title "z2roN_Proj v$V" --notes "z2roN_Proj v$V 자동 빌드" \
+            || gh release upload "v$V" "z2roN_Proj-win-v$V.zip" "z2roN_Proj-win-light-v$V.zip" "z2roN_Proj-sha256-v$V.txt" --clobber
